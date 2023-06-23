@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import pymongo,re,math,pickle,copy,warnings
 import sklearn.metrics as metrics
+import ipyparallel as PP
 from bson import json_util
 from bson.objectid import ObjectId
 from sklearn.neighbors import KNeighborsClassifier
@@ -17,13 +18,13 @@ from sklearn.naive_bayes import GaussianNB
 from matplotlib.colors import ListedColormap
 from sklearn import neighbors, datasets
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold
+from sklearn.cross_validation import StratifiedKFold
 from sklearn.feature_selection import RFECV
 from sklearn.datasets import make_classification
+from sklearn import cross_validation
 from sklearn.feature_selection import SelectKBest,f_classif
 from sklearn.metrics import accuracy_score,f1_score,precision_score,recall_score
 from sklearn.ensemble import RandomForestClassifier
-from functools import reduce
 
 warnings.simplefilter('ignore')
 
@@ -38,16 +39,23 @@ def flatten(L):
 
     return [i for i in list(set(reduce(aaa,L))) if i]
 
-def openMongo(host="pb.epa.gov",user=None,passwd=None,db=None,auth=True):
-    if auth:
-        if not user or passwd:
-            user,passwd = open(os.getenv('HOME')+'/.mngdb/passwd').read().strip().split(':')
+def initParallel(Data=None,Code=None,parallel_machine='your_parallel_machine'):
+    RC = PP.Client(profile=parallel_machine)
+    global lb_view
+    global d_view
+    d_view = RC[:]
+    d_view.block = True
+    lb_view = RC.load_balanced_view()
+    lb_view.block = True
+    
+    if Code: 
+        d_view.execute(Code)
+    if Data:
+        d_view.push(Data)
 
-        con2 = pymongo.MongoClient("mongodb://%s:%s@%s/%s" % (user,passwd,host,db))
-        DB = con2[db]
-    else:
-        con2 = pymongo.MongoClient("mongodb://%s/%s" % (host,db))
-        DB = con2[db]
+def openMongo(host="hostname",user='devel',passwd='devel',db='organtox_v1'):
+    con2 = pymongo.MongoClient("mongodb://%s:%s@%s/%s" % (user,passwd,host,db))
+    DB = con2[db]
     return DB
 
 
@@ -55,10 +63,10 @@ def getChemFP(CID,col=None,ds=None,fp=None,fill=None):
     Agg = [
             # Match chemicals in cluster
             {'$match': {
-                     'dsstox_sid':{'$in':CID}}
+                     'dsstox_cid':{'$in':CID}}
             },
             # Include these fields
-            {'$project':{'dsstox_sid':1,'_id':0,
+            {'$project':{'dsstox_cid':1,'_id':0,
                         'fp':'$'+ds},
             },
             # Unwind the fp 
@@ -75,27 +83,28 @@ def getChemFP(CID,col=None,ds=None,fp=None,fill=None):
 
     if R.shape[0]==0 or R.shape[1]==0: return pd.DataFrame()
     R['x']=1
-    return pd.pivot_table(R,index=['dsstox_sid'],columns='fp',values='x',
+    return pd.pivot_table(R,index=['dsstox_cid'],columns='fp',values='x',
                           aggfunc=len,fill_value=fill)
 
 
-def getToxDataSet(tox,MDB=None,col_tox='tox_fp',tox_pos_ds='tox_fpp1.ds',
+def getToxDataSet(tox,MDB=None,col_tox='tox_fp',
+                  tox_pos_ds='tox_fpp1.ds',
                   tox_neg_ds='tox_fpn1.ds',
-                  col_chm='chms_fp',chm_ds='mrgn.ds',
-                  col_bio='toxcast_fp',bio_ds='fpnd.all.ds'
                   ):
     if not MDB: return
-    Pos = np.array([i['dsstox_sid'] for i in MDB[col_tox].find({tox_pos_ds:tox,'dsstox_sid':{'$exists':1}},{'_id':0,'dsstox_sid':1})])
-    Neg = np.array([i['dsstox_sid'] for i in MDB[col_tox].find({tox_neg_ds:tox,'dsstox_sid':{'$exists':1}},{'_id':0,'dsstox_sid':1})])
+    Pos = np.array([i['dsstox_cid'] for i in MDB[col_tox].find({tox_pos_ds:tox,'dsstox_cid':{'$exists':1}},{'_id':0,'dsstox_cid':1})])
+    Neg = np.array([i['dsstox_cid'] for i in MDB[col_tox].find({tox_neg_ds:tox,'dsstox_cid':{'$exists':1}},{'_id':0,'dsstox_cid':1})])
     n_n = len(Neg)
     n_p = len(Pos)
     CID = list(np.concatenate((Pos,Neg)))
     X_tox = pd.DataFrame(np.concatenate((np.ones(n_p),np.zeros(n_n))),index=CID,columns=[tox])
-    X_chm = getChemFP(CID,col=MDB[col_chm],ds=chm_ds,fill=0)
-    X_bio = getChemFP(CID,col=MDB[col_bio],ds=bio_ds,fill=0)
+    X_chm = getChemFP(CID,col=MDB.chm_fp,ds='mrgn.ds',fill=0)
+    X_ct  = getChemFP(CID,col=MDB.chm_fp,ds='chmtp1.ds',fill=0)
+    X_bio = getChemFP(CID,col=MDB.bio_fp,ds='bio1.ds',fill=0)
     X_bc  = pd.merge(X_bio,X_chm,left_index=True,right_index=True)
+    X_bct = pd.merge(X_bio,X_ct,left_index=True,right_index=True)
     
-    return dict(tox=X_tox,chm=X_chm,bio=X_bio,bc=X_bc)
+    return dict(tox=X_tox,chm=X_chm,ct=X_ct,bio=X_bio,bc=X_bc,bct=X_bct)
 
 
 def getDataSubSet(Y,X,n_ss1=None,n_ss2=None,missing='drop',max_xy=False):
@@ -106,7 +115,7 @@ def getDataSubSet(Y,X,n_ss1=None,n_ss2=None,missing='drop',max_xy=False):
     
     ID = Y.index.intersection(X.index)
     if ID.shape[0]==0: 
-        print("Not enough overlap")
+        print "Not enough overlap"
         return
     
     Y = Y.ix[ID]
@@ -181,7 +190,7 @@ def getImbDataSubSet(Y,X,n_pos=None,n_neg=None,missing='drop',max_xy=False):
     
     ID = Y.index.intersection(X.index)
     if ID.shape[0]==0: 
-        print("Not enough overlap")
+        print "Not enough overlap"
         return
     
     Y = Y.ix[ID]
@@ -292,12 +301,12 @@ def runML1(Data_cv,y,
     DS=DS_top.ix[:n_ds].index
 
     LR_db={}
-    for Nm,Clf in CLF.items():
+    for Nm,Clf in CLF.iteritems():
         Clf.fit(X1[DS],Y1)
         try:
             Y =Clf.predict(X1[DS])
         except:
-            print(" >> Training evaluation failed",Nm)
+            print " >> Training evaluation failed",Nm
         else:
             R=dict(pred=y,dt_in=dt_in,dt_out=dt_out,n_ds=n_ds,
                    lr=Nm,n_pos=n_p,n_neg=n_n,n_obs=X1.shape[0])
@@ -361,7 +370,7 @@ def evalPred(Y_truth,Y_inferred,post=None):
        
     M['bacc']=0.5*(M['sens']+M['spec'])
    
-    if post: M={k+post:v for k,v in M.items()}
+    if post: M={k+post:v for k,v in M.iteritems()}
     
     return M
 
@@ -406,12 +415,12 @@ def runXVal(X1,Y1,n_ds=None,CLF=None,cv_nfolds=10,DS_top=pd.DataFrame()):
         X_test, Y_test  = X1.ix[I_test,DS], Y1.ix[I_test]
         CLF=getClassifiers()
         
-        for Nm,Clf in CLF.items():
+        for Nm,Clf in CLF.iteritems():
             Clf.fit(X_train,Y_train)
             try:
                 Y_pred=Clf.predict(X_test)
             except:
-                print(" >> Failed",Nm)
+                print " >> Failed",Nm
             else:
                 P=dict(lr=Nm,pt='cvt',n_train=len(I_train),n_test=len(I_test),
                        n_ds=n_ds,cv_kfold=cv_nfolds)

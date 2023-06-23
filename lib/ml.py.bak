@@ -92,7 +92,7 @@ def  runKFCV(Data_cv,y,
     if ext_val:
         X_e, Y_e = Data_ext.drop(y,axis=1),Data_ext[y] 
         ID_e     = X_e.index
-        Pred_Ext = pd.DataFrame(np.zeros((len(ID_e),len(CLF))),index=ID_e,columns=list(CLF.keys()))
+        Pred_Ext = pd.DataFrame(np.zeros((len(ID_e),len(CLF))),index=ID_e,columns=CLF.keys())
     
     FS   = SelectKBest(f_classif)    # Feature selection
     Perf = []                        # Performance
@@ -114,14 +114,14 @@ def  runKFCV(Data_cv,y,
             X_train,Y_train = X1.ix[I_train,DS],Y1.ix[I_train]
             X_test, Y_test  = X1.ix[I_test,DS], Y1.ix[I_test]
              
-            for Nm,Clf0 in CLF.items():
+            for Nm,Clf0 in CLF.iteritems():
                 Clf = copy.deepcopy(Clf0)
                 Clf.fit(X_train,Y_train)
                 try:
                     Y_pred=Clf.predict(X_test)
                     if ext_val: Y_e_pred=Clf.predict(X_e[DS])
                 except:
-                    print(" >> Failed",Nm)
+                    print " >> Failed",Nm
                 else:
                     P=dict(pred=y,dt=dt,lr=Nm,n_ds=n_ds,
                            n_train=len(I_train),n_test=len(I_test),
@@ -186,13 +186,13 @@ def  runLooCV(Data_cv,y,
             X_train,Y_train = X1.ix[I_train,DS],Y1.ix[I_train]
             X_test, Y_test  = X1.ix[I_test,DS], Y1.ix[I_test]
             
-            for Nm,Clf0 in CLF.items():
+            for Nm,Clf0 in CLF.iteritems():
                 Clf = copy.deepcopy(Clf0)
                 Clf.fit(X_train,Y_train)
                 try:
                     Y_pred=Clf.predict(X_test)
                 except:
-                    print(" >> Failed",Nm)
+                    print " >> Failed",Nm
                 else:
                     P=dict(pred=y,dt=dt,lr=Nm,n_ds=n_ds,
                            n_train=len(I_train),n_test=len(I_test),
@@ -255,7 +255,7 @@ def  runXGB(Data_cv,y,
             try:
                 Y_pred=Clf.predict(X_test)
             except:
-                print(" >> Failed",Nm)
+                print " >> Failed",Nm
             else:
                 P=dict(pred=y,dt=dt,lr=Nm,n_ds=X1.shape[1],
                        n_train=len(I_train),n_test=len(I_test),
@@ -295,8 +295,8 @@ def  runXGBGS(Data_cv,y,
     GBC = GradientBoostingClassifier(loss='deviance')
     
     params={'learning_rate': 10**np.linspace(-3,-1,num=5),
-            'max_depth': list(range(4,16,2)),
-            'n_estimators': list(range(100,500,50))
+            'max_depth': range(4,16,2),
+            'n_estimators': range(100,500,50)
             }
     
     scorer = None
@@ -331,7 +331,7 @@ def  runXGBGS(Data_cv,y,
             try:
                 Y_pred=Clf.predict(X_test)
             except:
-                print(" >> Failed",Nm)
+                print " >> Failed",Nm
             else:
                 P=dict(pred=y,dt=dt,lr=Nm,n_ds=n_ds,
                        n_train=len(I_train),n_test=len(I_test),
@@ -350,7 +350,7 @@ def evalPred(Y_truth,Y_inferred,post=None):
        
     M['bacc']=0.5*(M['sens']+M['spec'])
    
-    if post: M={k+post:v for k,v in M.items()}
+    if post: M={k+post:v for k,v in M.iteritems()}
     
     return M
 
